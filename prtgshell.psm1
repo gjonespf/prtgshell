@@ -1203,11 +1203,24 @@ function Get-PrtgSensorHistoricData {
 }
 
 
-function Measure-PRTGStorage {
-
+function Measure-PrtgStorage {
+	<#
+		.SYNOPSIS
+		Measures storage used by sensor
+		.DESCRIPTION
+		Returns detailed PRTG storage information including: 
+		remaining disk available
+		monitoring data stored
+		average daily growth rate
+		x days space available
+		
+		.EXAMPLE
+		Measure-PRTGStorage -SensorId 1241
+	#>
     Param (
         [Parameter(Mandatory=$True,Position=0)]
-        [int]$HistorySensorObjectId,
+        [alias('SensorId')]
+				[int]$HistorySensorObjectId,
 
         [Parameter(Mandatory=$False,Position=1)]
         [int]$HistoryInDays = 30
@@ -1247,7 +1260,15 @@ function Measure-PRTGStorage {
 # custom exe/xml functions
 
 function Set-PrtgResult {
-    Param (
+    	<#
+		.SYNOPSIS
+
+		.DESCRIPTION
+		
+		.EXAMPLE
+
+	#>
+	Param (
     [Parameter(Mandatory=$True,Position=0)]
     [string]$Channel,
     
@@ -1345,6 +1366,14 @@ function Set-PrtgResult {
 
 
 function Set-PrtgError {
+	<#
+		.SYNOPSIS
+
+		.DESCRIPTION
+		
+		.EXAMPLE
+
+	#>
 	Param (
 		[Parameter(Position=0)]
 		[string]$PrtgErrorText
@@ -1360,7 +1389,441 @@ function Set-PrtgError {
 exit
 }
 
+
+function Get-PrtgSensorChannels {
+<#
+	.SYNOPSIS
+	Lists the channels defined in a sensor
+	.DESCRIPTION
+	
+	.EXAMPLE
+	Get-PrtgSensorChannels -SensorId 6250
+#>
+	Param (
+		[Parameter(Mandatory=$True,Position=0)]
+		[int]$SensorId
+	)
+
+	Get-PrtgTableData channels $SensorId
+}
+
+###############################################################################
+
+function Get-PrtgParentProbe {
+	<#
+		.SYNOPSIS
+			Show parent probe of device
+		.DESCRIPTION
+		
+		.EXAMPLE
+		Get-PrtgParentProbe 3521
+	#>
+
+    Param (
+        [Parameter(Mandatory=$True,Position=0)]
+        [int]$DeviceId
+    )
+
+	Get-PrtgObjectDetails $DeviceId -Value probename
+}
+
+###############################################################################
+
+function Get-PrtgDeviceSensors {
+	<#
+	.SYNOPSIS
+		
+	.DESCRIPTION
+		
+	.EXAMPLE
+		
+	#>
+
+    Param (
+        [Parameter(Mandatory=$True,Position=0)]
+        [int]$DeviceId
+    )
+	
+	Get-PrtgTableData sensors $DeviceId
+}
+
+###############################################################################
+
+function Get-PrtgDeviceSensorsByTag {
+	<#
+	.SYNOPSIS
+		
+	.DESCRIPTION
+		
+	.EXAMPLE
+		
+	#>
+
+    Param (
+        [Parameter(Mandatory=$True,Position=0)]
+        [string[]]$FilterTags,
+
+        [Parameter(Mandatory=$False,Position=1)]
+        [int]$SensorId
+    )
+
+    Get-PrtgTableData sensors -FilterTags $FilterTags
+}
+
+###############################################################################
+
+function Rename-PrtgObject {
+	<#
+	.SYNOPSIS
+		
+	.DESCRIPTION
+		
+	.EXAMPLE
+		
+	#>
+
+    Param (
+			[Parameter(Mandatory=$True,Position=0)]
+			[alias('SensorId')]
+			[int]$ObjectId,
+
+			[Parameter(Mandatory=$True,Position=1)]
+			[string]$NewName
+    )
+
+    PROCESS {
+		return Set-PrtgObjectProperty $ObjectId "name" $NewName
+    }
+}
+
+###############################################################################
+# these have also not been extensively tested
+
+
+
+function Get-PrtgSensorTree {
+<#
+	.SYNOPSIS
+	Lists the sensors on a device
+	.DESCRIPTION
+	
+	.EXAMPLE
+	Get-PrtgSensorTree -ObjectId 6250
+#>
+  Param (
+		[Parameter(Mandatory=$False,Position=0)]
+		[int]$ObjectId,
+
+		[Parameter(Mandatory=$False,Position=1)]
+		[string]$Value
+    )
+
+    BEGIN {
+		$PRTG = $Global:PrtgServerObject
+		if ($PRTG.Protocol -eq "https") { HelperSSLConfig }
+    }
+
+    PROCESS {
+		$url = HelperURLBuilder "table.xml" (
+			"&content=sensortree"
+		)
+
+        $global:lasturl = $url
+        
+		$QueryObject = HelperHTTPQuery $url -AsXML
+		
+		return $QueryObject
+    }
+}
+
+
+function Get-PRTGProbes {
+	<#
+		.SYNOPSIS
+		Lists of probes
+		.DESCRIPTION
+		
+		.EXAMPLE
+		Get-PRTGProbes
+	#>
+	
+	$data = Get-PrtgSensorTree
+	foreach ($node in $data.data.prtg.sensortree.nodes.group.probenode) {
+		$node | Select-Object @{n='objid';e={ $_.id[0] }},name
+	}
+}
+
+
+function Get-PrtgGroups {
+	<#
+		.SYNOPSIS
+		Lists the groups in the device tree
+		.DESCRIPTION
+		
+		.EXAMPLE
+		Get-PrtgGroups
+	#>
+	
+		Param (
+	)    
+		Get-PrtgTableData -content "groups" 
+		
+    # -columns "objid,probe,group,name,downsens,partialdownsens,downacksens,upsens,warnsens,pausedsens,unusualsens"
+}
+
+function Remove-PrtgSensorNumbers {
+<#
+	.SYNOPSIS
+	Remove extra numbers from sensor names
+	.DESCRIPTION
+	Remove the extra numbers from the end of the sensor names.
+	
+	.EXAMPLE
+	Get-PrtgGroups | ft	
+	Where 2005 is the groupId from this list
+
+	.EXAMPLE
+	$DeviceList = Get-PrtgTableData devices -ObjectId 2005 -Column "objid"
+	
+	Get the list of devices you want to clean up
+	
+	.EXAMPLE
+	ForEach ($device in $DeviceList) { Write-Warning DeviceID $device ; Remove-PrtgSensorNumbers $device }
+
+	Execute the PRTG command
+#>
+
+	[CmdletBinding(SupportsShouldProcess=$True, ConfirmImpact='Medium')]
+	Param (
+		[Parameter(Mandatory=$True,Position=0)]
+		[int]$ObjectId
+	)
+	
+	Begin { }
+
+	Process {
+		$ObjectType = (Get-PrtgObjectDetails $ObjectId).sensortype
+		
+		if ($ObjectType -eq "device") {
+
+			$ObjectSensors = Get-PrtgTableData sensors $ObjectId | select objid,sensor
+			$regex = [regex]"\s\d+$"
+
+			foreach ($Sensor in $ObjectSensors) {
+				If ($pscmdlet.ShouldProcess("SensorID $Sensor", "Remove numbers from end of sensor name")) {
+					$SensorName = $Sensor.sensor -replace $regex
+					
+					$ReturnName = $Sensor.sensor + " -> " + $SensorName
+					$ReturnValue = $(Set-PrtgObjectProperty -ObjectId $Sensor.objid -Property name -Value $SensorName) -replace "<[^>]*?>|<[^>]*>", ""
+					
+					"" | Select @{n='Name Change';e={$ReturnName}},@{n='Return Code';e={$ReturnValue}}
+				}
+			}
+		} else {
+			Write-Error "Object must be a device; provided object is type $ObjectType."
+		}
+	}
+	End {}
+}
+
+
+function Invoke-PrtgObjectScan {
+	<#
+		.SYNOPSIS
+			Scan a sensor now     
+		.DESCRIPTION
+						
+		.EXAMPLE
+					
+	#>
+
+		[CmdletBinding()]
+    Param (
+				# ID of the object to scan
+				[Parameter(Mandatory=$true)]
+				[ValidateNotNullOrEmpty()]
+				[ValidateScript({$_ -gt 0})]
+				[alias('SensorId')]
+				[int]$ObjectId
+    )
+
+    BEGIN {
+			$PRTG = $Global:PrtgServerObject
+			if ($PRTG.Protocol -eq "https") { HelperSSLConfig }
+    }
+
+    PROCESS {
+			$url = HelperURLBuilder "scannow.htm" (
+							"&id=$ObjectId"
+			)
+
+			$global:lasturl = $url
+			$QueryObject = HelperHTTPQuery $url
+
+			return $QueryObject.Data -replace "<[^>]*?>|<[^>]*>", ""
+    }
+}
+
+function Invoke-PrtgObjectDiscovery {
+	<#
+	.SYNOPSIS
+
+		Run Auto Discovery for an object     
+	.DESCRIPTION
+					
+	.EXAMPLE
+					
+	#>
+
+	[CmdletBinding()]
+	Param (
+			# ID of the object to scan
+			[Parameter(Mandatory=$true)]
+			[ValidateNotNullOrEmpty()]
+			[ValidateScript({$_ -gt 0})]
+			[Alias('DeviceId')]
+			[int]$ObjectId
+	)
+
+    BEGIN {
+			$PRTG = $Global:PrtgServerObject
+			if ($PRTG.Protocol -eq "https") { HelperSSLConfig }
+    }
+
+    PROCESS {
+			$url = HelperURLBuilder "discovernow.htm" (
+							"&id=$ObjectId"
+		)
+
+			$global:lasturl = $url
+			$QueryObject = HelperHTTPQuery $url
+
+			return $QueryObject.Data -replace "<[^>]*?>|<[^>]*>", ""
+    }
+}
+
+
+###############################################################################
+
+function New-PrtgSensor {
+<#
+	.SYNOPSIS
+		Create a new sensor    
+	.DESCRIPTION
+					
+	.EXAMPLE
+					
+#>
+    Param (
+        [Parameter(Mandatory=$True,Position=0)]
+        [psobject]$PrtgObject
+    )
+
+    BEGIN {
+			Add-Type -AssemblyName System.Web # Needed for System.Web.HttpUtility
+			$PRTG = $Global:PrtgServerObject
+			if ($PRTG.Protocol -eq "https") { HelperSSLConfig }
+    }
+
+    PROCESS {
+
+    ###############################################################################
+    # Tediously inspect the Object, needs more c#, maybe?
+
+    $PropertyTypes = @{Name            = "String"
+                       Tags            = "String"
+                       Priority        = "Int32"
+                       Script          = "String"
+                       ExeParams       = "String"
+                       Environment     = "Int32"
+                       SecurityContext = "Int32"
+                       Mutex           = "String"
+                       ExeResult       = "Int32"
+                       ParentId        = "Int32"}
+
+    foreach ($p in $PropertyTypes.GetEnumerator()) {
+        $PropName  = $p.Name
+        $PropValue = $PrtgObject."$PropName"
+        $Type      = $PrtgObject."$PropName".GetType().Name
+        
+        if ($Type -eq $p.Value) {
+            switch ($PropName) {
+                priority {
+                    if (($PropValue -lt 1) -or ($PropValue -gt 5)) {
+                        $ErrorMessage = "Error creating Sensor $($Prtgobject.Name). $PropName is $PropValue, must be a integer from 1 to 5."
+                    }
+                }
+                { ($_ -eq "environment") -or ($_ -eq "securitycontext") } {
+                    if (($PropValue -lt 0) -or ($PropValue -gt 1)) {
+                        $ErrorMessage = "Error creating Sensor $($Prtgobject.Name). $PropName is $PropValue, must be a integer from 0 to 1."
+                    }
+                }
+                exeresult {
+                    if (($PropValue -lt 0) -or ($PropValue -gt 2)) {
+                        $ErrorMessage = "Error creating Sensor $($Prtgobject.Name). $PropName is $PropValue, must be a integer from 0 to 1."
+                    }
+                }
+            }
+        } else {
+            $ErrorMessage = "Error creating Sensor $($Prtgobject.Name), $($p.Name) is $Type, should be $($p.Value)"
+        }
+        if ($ErrorMessage) { return $ErrorMessage }
+    }
+
+    ###############################################################################
+    # build the post data payload/query string
+    # note that "$QueryString.ToString()" actually builds this
+    
+    $QueryStringTable = @{
+	    "name_" = $PrtgObject.Name
+	    "tags_" = $PrtgObject.Tags
+	    "priority_" = $PrtgObject.Priority
+	    "exefile_" = "$($PrtgObject.Script)|$$(PrtgObject.Script)||" # WHAT THE FUCK
+	    "exefilelabel" = ""
+	    "exeparams_" = $PrtgObject.ExeParams
+	    "environment_" = $PrtgObject.Environment
+	    "usewindowsauthentication_" = $PrtgObject.SecurityContext
+	    "mutexname_" = $PrtgObject.Mutex
+	    "timeout_" = 60
+	    "writeresult_" = $PrtgObject.ExeResult
+	    "intervalgroup" = 1
+	    "interval_" = "60|60 seconds"
+	    "inherittriggers" = 1
+	    "id" = $PrtgObject.ParentId
+	    "sensortype" = "exexml"
+    }
+
+    # create a blank, writable HttpValueCollection object
+    $QueryString = [System.Web.httputility]::ParseQueryString("")
+
+    # iterate through the hashtable and add the values to the HttpValueCollection
+    foreach ($Pair in $QueryStringTable.GetEnumerator()) {
+	    $QueryString[$($Pair.Name)] = $($Pair.Value)
+    }
+
+    ###############################################################################
+    # fire the api call
+
+    $Url  = "https://$($PRTG.Server)"
+    $Url += "/addsensor5.htm?"
+    $Url += "username=$($PRTG.UserName)&"
+    $Url += "passhash=$($PRTG.PassHash)"
+    #$Url
+
+    HelperHTTPPostCommand $Url $QueryString.ToString() | Out-Null
+
+    }
+}
+
 function New-PrtgSnmpTrafficSensor {
+<#
+	.SYNOPSIS
+		Create a new sensor    
+	.DESCRIPTION
+					
+	.EXAMPLE
+					
+#>
     Param (
         [Parameter(Mandatory=$True)]
         [string]$Name,
@@ -1476,375 +1939,16 @@ function New-PrtgSnmpTrafficSensor {
     }
 }
 
-function Get-PrtgSensorChannels {
-	<#
-		.SYNOPSIS
-			Show parent probe of device
-		.DESCRIPTION
-		
-		.EXAMPLE
-	#>
-
-	Param (
-		[Parameter(Mandatory=$True,Position=0)]
-		[int]$SensorId
-	)
-
-	Get-PrtgTableData channels $SensorId
-}
-
-###############################################################################
-
-function Get-PrtgParentProbe {
-	<#
-	.SYNOPSIS
-		
-	.DESCRIPTION
-		
-	.EXAMPLE
-		
-	#>
-
-    Param (
-        [Parameter(Mandatory=$True,Position=0)]
-        [int]$DeviceId
-    )
-
-	Get-PrtgObjectDetails $DeviceId -Value probename
-}
-
-###############################################################################
-
-function Get-PrtgDeviceSensors {
-	<#
-	.SYNOPSIS
-		
-	.DESCRIPTION
-		
-	.EXAMPLE
-		
-	#>
-
-    Param (
-        [Parameter(Mandatory=$True,Position=0)]
-        [int]$DeviceId
-    )
-	
-	Get-PrtgTableData sensors $DeviceId
-}
-
-###############################################################################
-
-function Get-PrtgDeviceSensorsByTag {
-	<#
-	.SYNOPSIS
-		
-	.DESCRIPTION
-		
-	.EXAMPLE
-		
-	#>
-
-    Param (
-        [Parameter(Mandatory=$True,Position=0)]
-        [string[]]$FilterTags,
-
-        [Parameter(Mandatory=$False,Position=1)]
-        [int]$SensorId
-    )
-
-    Get-PrtgTableData sensors -FilterTags $FilterTags
-}
-
-###############################################################################
-
-function Rename-PrtgObject {
-	<#
-	.SYNOPSIS
-		
-	.DESCRIPTION
-		
-	.EXAMPLE
-		
-	#>
-
-    Param (
-			[Parameter(Mandatory=$True,Position=0)]
-			[alias('SensorId')]
-			[int]$ObjectId,
-
-			[Parameter(Mandatory=$True,Position=1)]
-			[string]$NewName
-    )
-
-    PROCESS {
-		return Set-PrtgObjectProperty $ObjectId "name" $NewName
-    }
-}
-
-###############################################################################
-# these have also not been extensively tested
-
-
-
-function Get-PrtgSensorTree {
-    Param (
-        [Parameter(Mandatory=$False,Position=0)]
-        [int]$ObjectId,
-		
-        [Parameter(Mandatory=$False,Position=1)]
-        [string]$Value
-    )
-
-    BEGIN {
-		$PRTG = $Global:PrtgServerObject
-		if ($PRTG.Protocol -eq "https") { HelperSSLConfig }
-    }
-
-    PROCESS {
-		$url = HelperURLBuilder "table.xml" (
-			"&content=sensortree"
-		)
-
-        $global:lasturl = $url
-        
-		$QueryObject = HelperHTTPQuery $url -AsXML
-		
-		return $QueryObject
-    }
-}
-
-
-function Get-PRTGProbes {
-	$data = Get-PrtgSensorTree
-	foreach ($node in $data.data.prtg.sensortree.nodes.group.probenode) {
-		$node | Select-Object @{n='objid';e={ $_.id[0] }},name
-	}
-}
-
-
-function Get-PrtgGroups{
-    
-		Get-PrtgTableData -content "groups" 
-		
-    # -columns "objid,probe,group,name,downsens,partialdownsens,downacksens,upsens,warnsens,pausedsens,unusualsens"
-}
-function Remove-PrtgSensorNumbers {
-
-	[CmdletBinding(SupportsShouldProcess=$True, ConfirmImpact='Medium')]
-	Param (
-		[Parameter(Mandatory=$True,Position=0)]
-		[int]$ObjectId
-	)
-	
-	Begin { }
-
-	Process {
-		$ObjectType = (Get-PrtgObjectDetails $ObjectId).sensortype
-		
-		if ($ObjectType -eq "device") {
-
-			$ObjectSensors = Get-PrtgTableData sensors $ObjectId | select objid,sensor
-			$regex = [regex]"\s\d+$"
-
-			foreach ($Sensor in $ObjectSensors) {
-				If ($pscmdlet.ShouldProcess("SensorID $Sensor", "Remove numbers from end of sensor name")) {
-					$SensorName = $Sensor.sensor -replace $regex
-					
-					$ReturnName = $Sensor.sensor + " -> " + $SensorName
-					$ReturnValue = $(Set-PrtgObjectProperty -ObjectId $Sensor.objid -Property name -Value $SensorName) -replace "<[^>]*?>|<[^>]*>", ""
-					
-					"" | Select @{n='Name Change';e={$ReturnName}},@{n='Return Code';e={$ReturnValue}}
-				}
-			}
-		} else {
-			Write-Error "Object must be a device; provided object is type $ObjectType."
-		}
-	}
-	End {}
-}
-
-
-function Invoke-PrtgObjectScan {
-	<#
-		.SYNOPSIS
-			Scan a sensor now     
-		.DESCRIPTION
-						
-		.EXAMPLE
-					
-	#>
-
-		[CmdletBinding()]
-    Param (
-				# ID of the object to scan
-				[Parameter(Mandatory=$true)]
-				[ValidateNotNullOrEmpty()]
-				[ValidateScript({$_ -gt 0})]
-				[alias('SensorId')]
-				[int]$ObjectId
-    )
-
-    BEGIN {
-			$PRTG = $Global:PrtgServerObject
-			if ($PRTG.Protocol -eq "https") { HelperSSLConfig }
-    }
-
-    PROCESS {
-			$url = HelperURLBuilder "scannow.htm" (
-							"&id=$ObjectId"
-			)
-
-			$global:lasturl = $url
-			$QueryObject = HelperHTTPQuery $url
-
-			return $QueryObject.Data -replace "<[^>]*?>|<[^>]*>", ""
-    }
-}
-
-function Invoke-PrtgObjectDiscovery {
-	<#
-	.SYNOPSIS
-
-		Run Auto Discovery for an object     
-	.DESCRIPTION
-					
-	.EXAMPLE
-					
-	#>
-
-	[CmdletBinding()]
-	Param (
-			# ID of the object to scan
-			[Parameter(Mandatory=$true)]
-			[ValidateNotNullOrEmpty()]
-			[ValidateScript({$_ -gt 0})]
-			[Alias('DeviceId')]
-			[int]$ObjectId
-	)
-
-    BEGIN {
-			$PRTG = $Global:PrtgServerObject
-			if ($PRTG.Protocol -eq "https") { HelperSSLConfig }
-    }
-
-    PROCESS {
-			$url = HelperURLBuilder "discovernow.htm" (
-							"&id=$ObjectId"
-		)
-
-			$global:lasturl = $url
-			$QueryObject = HelperHTTPQuery $url
-
-			return $QueryObject.Data -replace "<[^>]*?>|<[^>]*>", ""
-    }
-}
-
-function New-PrtgSensor {
-    Param (
-        [Parameter(Mandatory=$True,Position=0)]
-        [psobject]$PrtgObject
-    )
-
-    BEGIN {
-			Add-Type -AssemblyName System.Web # Needed for System.Web.HttpUtility
-			$PRTG = $Global:PrtgServerObject
-			if ($PRTG.Protocol -eq "https") { HelperSSLConfig }
-    }
-
-    PROCESS {
-
-    ###############################################################################
-    # Tediously inspect the Object, needs more c#, maybe?
-
-    $PropertyTypes = @{Name            = "String"
-                       Tags            = "String"
-                       Priority        = "Int32"
-                       Script          = "String"
-                       ExeParams       = "String"
-                       Environment     = "Int32"
-                       SecurityContext = "Int32"
-                       Mutex           = "String"
-                       ExeResult       = "Int32"
-                       ParentId        = "Int32"}
-
-    foreach ($p in $PropertyTypes.GetEnumerator()) {
-        $PropName  = $p.Name
-        $PropValue = $PrtgObject."$PropName"
-        $Type      = $PrtgObject."$PropName".GetType().Name
-        
-        if ($Type -eq $p.Value) {
-            switch ($PropName) {
-                priority {
-                    if (($PropValue -lt 1) -or ($PropValue -gt 5)) {
-                        $ErrorMessage = "Error creating Sensor $($Prtgobject.Name). $PropName is $PropValue, must be a integer from 1 to 5."
-                    }
-                }
-                { ($_ -eq "environment") -or ($_ -eq "securitycontext") } {
-                    if (($PropValue -lt 0) -or ($PropValue -gt 1)) {
-                        $ErrorMessage = "Error creating Sensor $($Prtgobject.Name). $PropName is $PropValue, must be a integer from 0 to 1."
-                    }
-                }
-                exeresult {
-                    if (($PropValue -lt 0) -or ($PropValue -gt 2)) {
-                        $ErrorMessage = "Error creating Sensor $($Prtgobject.Name). $PropName is $PropValue, must be a integer from 0 to 1."
-                    }
-                }
-            }
-        } else {
-            $ErrorMessage = "Error creating Sensor $($Prtgobject.Name), $($p.Name) is $Type, should be $($p.Value)"
-        }
-        if ($ErrorMessage) { return $ErrorMessage }
-    }
-
-    ###############################################################################
-    # build the post data payload/query string
-    # note that "$QueryString.ToString()" actually builds this
-    
-    $QueryStringTable = @{
-	    "name_" = $PrtgObject.Name
-	    "tags_" = $PrtgObject.Tags
-	    "priority_" = $PrtgObject.Priority
-	    "exefile_" = "$($PrtgObject.Script)|$$(PrtgObject.Script)||" # WHAT THE FUCK
-	    "exefilelabel" = ""
-	    "exeparams_" = $PrtgObject.ExeParams
-	    "environment_" = $PrtgObject.Environment
-	    "usewindowsauthentication_" = $PrtgObject.SecurityContext
-	    "mutexname_" = $PrtgObject.Mutex
-	    "timeout_" = 60
-	    "writeresult_" = $PrtgObject.ExeResult
-	    "intervalgroup" = 1
-	    "interval_" = "60|60 seconds"
-	    "inherittriggers" = 1
-	    "id" = $PrtgObject.ParentId
-	    "sensortype" = "exexml"
-    }
-
-    # create a blank, writable HttpValueCollection object
-    $QueryString = [System.Web.httputility]::ParseQueryString("")
-
-    # iterate through the hashtable and add the values to the HttpValueCollection
-    foreach ($Pair in $QueryStringTable.GetEnumerator()) {
-	    $QueryString[$($Pair.Name)] = $($Pair.Value)
-    }
-
-    ###############################################################################
-    # fire the api call
-
-    $Url  = "https://$($PRTG.Server)"
-    $Url += "/addsensor5.htm?"
-    $Url += "username=$($PRTG.UserName)&"
-    $Url += "passhash=$($PRTG.PassHash)"
-    #$Url
-
-    HelperHTTPPostCommand $Url $QueryString.ToString() | Out-Null
-
-    }
-}
-
-###############################################################################
 
 function New-PrtgSnmpCpuLoadSensor {
+<#
+	.SYNOPSIS
+		Create a new sensor    
+	.DESCRIPTION
+					
+	.EXAMPLE
+					
+#>
     Param (
         [Parameter(Mandatory=$True)]
         [string]$Name,
